@@ -1,4 +1,4 @@
-/* dsh-plugin-token-usage — Client half v2.1 (web bundle, built by hand to
+/* dsh-token-monitor — Client half v2.1 (web bundle, built by hand to
  * match the client-modules bundle protocol: window.__ModuleLoader__.load
  * registers a factory that receives a CommonJS require). This file is the
  * `./client` exports subpath declared in package.json.
@@ -14,7 +14,7 @@
  * flat white cards, 1px hairline borders, 8-12px radii, no shadows.
  */
 window.__ModuleLoader__.load({
-  id: "dsh-plugin-token-usage",
+  id: "dsh-token-monitor",
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
@@ -241,7 +241,7 @@ window.__ModuleLoader__.load({
       // bundle runs in the real page — inject a style element and remove it
       // when the plugin is disposed
       var style = document.createElement("style")
-      style.setAttribute("data-plugin", "dsh-plugin-token-usage")
+      style.setAttribute("data-plugin", "dsh-token-monitor")
       style.textContent = CSS
       document.head.append(style)
       ctx.effect(function () {

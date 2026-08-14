@@ -1,7 +1,7 @@
 'use strict'
 
 /**
- * dsh-plugin-token-usage — Host half (v2: simplified)
+ * dsh-token-monitor — Host half (v2: simplified)
  *
  * Jobs:
  *  1. Listen to the `llm/stream` waterfall and fold every real model call's
