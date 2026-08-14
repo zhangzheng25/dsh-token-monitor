@@ -1,0 +1,40 @@
+{
+  "name": "dsh-plugin-token-usage",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness plugin: token usage dashboard (today / 7 / 30 days), GitHub-style 90-day contribution graph and per-workspace conversation stats, rendered as a settings page. Data from live llm/stream usage chunks plus session-log backfill, persisted across restarts.",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "token",
+    "usage",
+    "billing"
+  ],
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./client/bundle.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "files": [
+    "src",
+    "client",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "check": "node --check src/index.js && node --check client/bundle.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
