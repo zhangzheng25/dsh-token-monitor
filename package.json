@@ -1,5 +1,5 @@
 {
-  "name": "dsh-plugin-token-usage",
+  "name": "dsh-token-monitor",
   "version": "0.2.0",
   "description": "DeepSeek Harness plugin: token usage dashboard (today / 7 / 30 days), GitHub-style 90-day contribution graph and per-workspace conversation stats, rendered as a settings page. Data from live llm/stream usage chunks plus session-log backfill, persisted across restarts.",
   "license": "MIT",
