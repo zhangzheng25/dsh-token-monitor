@@ -2,6 +2,8 @@
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that shows your **token usage and conversation stats** as a native settings page (**Settings → Token 用量 / Token Usage**): today / 7-day / 30-day token totals, a GitHub-style 90-day contribution graph, and conversation counts.
 
+![Token Usage settings page](screenshot.png)
+
 ## Features
 
 - 📊 **Metric cards** — today / 7 days / 30 days token totals with Chinese units (万 / 亿), big-number only, no clutter.
