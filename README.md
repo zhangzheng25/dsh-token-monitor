@@ -1,5 +1,9 @@
 # dsh-token-monitor
 
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a> | <strong>English</strong>
+</p>
+
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that shows your **token usage and conversation stats** as a native settings page (**Settings → Token 用量 / Token Usage**): today / 7-day / 30-day token totals, a GitHub-style 90-day contribution graph, and conversation counts.
 
 ![Token Usage settings page](screenshot.png)

@@ -1,5 +1,9 @@
 # dsh-token-monitor
 
+<p align="center">
+  <strong>简体中文</strong> | <a href="README.md">English</a>
+</p>
+
 一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：在 **设置 → Token 用量** 页面上原生展示你的 **token 用量与对话统计**——今日 / 近 7 天 / 近 30 天总量、GitHub 风格的 90 天提交图、以及会话数统计。
 
 ![Token 用量设置页](screenshot.png)
