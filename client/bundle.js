@@ -1,4 +1,4 @@
-/* dsh-token-monitor — Client half v2.1 (web bundle, built by hand to
+/* dsh-token-monitor — Client half v2.4 (web bundle, built by hand to
  * match the client-modules bundle protocol: window.__ModuleLoader__.load
  * registers a factory that receives a CommonJS require). This file is the
  * `./client` exports subpath declared in package.json.
@@ -9,10 +9,13 @@
  *
  * Registers a settings page ("Token 用量") into the root-scoped
  * `settings.section` slot: today / 7-day / 30-day token usage, conversation
- * counts and a GitHub-style 90-day contribution graph that stretches across
- * the full content width. Visual language follows the DSH theme tokens
- * (--dsw-alias-*): flat cards, 1px hairline borders, 8-12px radii, no
- * shadows — and it adapts automatically to DSH light and dark themes.
+ * counts, a 30-day per-model stacked bar chart (hover/click a day to pin the
+ * breakdown card, styled after temp/tooltip.png), and a model usage ranking
+ * fixed to the 30-day window (top-4 cards in a 2×2 grid: rank number on its
+ * own line, model + token total, provider + usage share — no color swatch).
+ * Visual language follows the DSH theme tokens (--dsw-alias-*): flat cards,
+ * 1px hairline borders, 8-12px radii, no shadows — and it adapts
+ * automatically to DSH light and dark themes.
  */
 window.__ModuleLoader__.load({
   id: "dsh-token-monitor",
@@ -23,15 +26,22 @@ window.__ModuleLoader__.load({
     var React = require("react")
 
     var SNAPSHOT_URL = "/token-monitor/snapshot"
+    var NO_DATA_MSG = "暂无模型用量数据——插件升级后点一次「回填历史」即可。"
     var MS = 86400000
-    var GRAPH_DAYS = 90
-    // DSH accent (#4f8cff family) with a neutral empty level.
-    var LEVEL_COLORS = [
-      "rgba(127,127,127,0.14)",
-      "rgba(79,140,255,0.25)",
-      "rgba(79,140,255,0.5)",
-      "rgba(79,140,255,0.75)",
-      "#4f8cff"
+    var MODEL_WINDOW = 30
+    // chart plot height in px, shared by the CSS and the segment height math
+    var BAR_HEIGHT = 116
+    // Per-model palette (pink → orange), assigned in usage-rank order.
+    var MODEL_COLORS = [
+      "#f472b6",
+      "#a78bfa",
+      "#60a5fa",
+      "#22d3ee",
+      "#2dd4bf",
+      "#4ade80",
+      "#a3e635",
+      "#facc15",
+      "#fb923c"
     ]
 
     var CSS = [
@@ -47,36 +57,50 @@ window.__ModuleLoader__.load({
       ".tu-card-label { font-size:12px; color:var(--dsw-alias-label-secondary, rgba(0,0,0,.6)); }",
       ".tu-card-value { font-size:26px; font-weight:700; margin-top:4px; letter-spacing:-.02em; color:var(--dsw-alias-label-primary, #1a1a1a); line-height:1.15; }",
       ".tu-card-sub { font-size:11px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.6)); margin-top:4px; }",
-      ".tu-graph { display:flex; flex-direction:column; gap:6px; }",
-      ".tu-graph-months { display:grid; gap:3px; margin-left:26px; }",
-      ".tu-month { font-size:10px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.6)); white-space:nowrap; overflow:visible; }",
-      ".tu-graph-body { display:flex; gap:6px; }",
-      ".tu-graph-labels { display:grid; grid-template-rows:repeat(7,1fr); gap:3px; width:20px; font-size:10px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
-      ".tu-graph-cells { display:grid; grid-auto-flow:column; grid-template-rows:repeat(7,auto); gap:3px; flex:1; width:100%; }",
-      ".tu-cell { width:100%; aspect-ratio:1; border-radius:3px; }",
-      ".tu-cell-future { visibility:hidden; }",
-      ".tu-cell-hover { outline:2px solid rgba(79,140,255,.85); outline-offset:1px; }",
-      ".tu-legend { display:flex; align-items:center; gap:4px; font-size:10px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.6)); }",
-      ".tu-swatch { width:10px; height:10px; border-radius:2px; }",
-      ".tu-tip { position:fixed; z-index:1000; visibility:hidden; box-sizing:border-box; width:184px; background:var(--dsw-alias-bg-layer-2, #fff); border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:10px; box-shadow:var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.12)); padding:10px 12px 9px; pointer-events:none; animation:tu-tip-in .14s ease-out; }",
+      ".tu-tip { position:fixed; z-index:1000; visibility:hidden; box-sizing:border-box; width:210px; background:var(--dsw-alias-bg-layer-2, #fff); border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:10px; box-shadow:var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.08)); padding:12px 14px; pointer-events:none; animation:tu-tip-in .14s ease-out; }",
       ".tu-tip-arrow { position:absolute; width:8px; height:8px; background:var(--dsw-alias-bg-layer-2, #fff); }",
       ".tu-tip-arrow-down { bottom:-4px; transform:rotate(45deg); border-right:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-bottom:1px solid var(--dsw-alias-border-l2, #e5e5e5); }",
       ".tu-tip-arrow-up { top:-4px; transform:rotate(45deg); border-left:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-top:1px solid var(--dsw-alias-border-l2, #e5e5e5); }",
-      ".tu-tip-date { font-size:11px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.6)); }",
-      ".tu-tip-total { font-size:20px; font-weight:700; line-height:1.25; margin:2px 0 8px; letter-spacing:-.01em; color:var(--dsw-alias-label-primary, #1a1a1a); }",
-      ".tu-tip-unit { font-size:12px; font-weight:400; color:var(--dsw-alias-label-secondary, rgba(0,0,0,.6)); margin-left:5px; }",
-      ".tu-tip-rows { border-top:1px solid var(--dsw-alias-border-l1, #e8e8e8); padding-top:6px; display:flex; flex-direction:column; gap:3px; }",
-      ".tu-tip-row { display:flex; justify-content:space-between; gap:14px; font-size:12px; line-height:16px; }",
-      ".tu-tip-row-label { color:var(--dsw-alias-label-secondary, rgba(0,0,0,.6)); white-space:nowrap; }",
+      ".tu-tip-date { font-size:12px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
+      ".tu-tip-total { font-size:18px; font-weight:600; line-height:1.25; margin:2px 0 8px; letter-spacing:-.01em; color:var(--dsw-alias-label-primary, #1a1a1a); }",
+      ".tu-tip-unit { font-size:12px; font-weight:400; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); margin-left:5px; }",
+      ".tu-tip-rows { display:flex; flex-direction:column; gap:4px; }",
+      ".tu-tip-row { display:flex; justify-content:space-between; gap:14px; font-size:13px; line-height:16px; }",
+      ".tu-tip-row-label { display:flex; align-items:center; gap:6px; color:var(--dsw-alias-label-secondary, rgba(0,0,0,.6)); white-space:nowrap; }",
       ".tu-tip-row-value { color:var(--dsw-alias-label-primary, #1a1a1a); font-variant-numeric:tabular-nums; }",
-      ".tu-tip-foot { margin-top:6px; font-size:11px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
+      ".tu-tip-dot { width:8px; height:8px; border-radius:2px; flex:none; }",
       ".tu-tip-empty { font-size:12px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
+      ".tu-msec { display:flex; flex-direction:column; gap:8px; }",
+      ".tu-mchart { border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:10px; padding:16px 16px 10px; background:var(--dsw-alias-bg-layer-1, #fff); }",
+      ".tu-mbars { display:flex; gap:2px; align-items:flex-end; height:" + BAR_HEIGHT + "px; cursor:pointer; }",
+      ".tu-mcol { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:flex-end; height:100%; background-image:radial-gradient(circle, rgba(127,127,127,.3) 1px, transparent 1.5px); background-size:13px 13px; background-position:center; }",
+      ".tu-mseg { width:100%; }",
+      ".tu-mlabels { display:flex; gap:2px; margin-top:4px; font-size:10px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
+      ".tu-mlabel { flex:1; min-width:0; overflow:visible; white-space:nowrap; }",
+      ".tu-mrank { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }",
+      ".tu-rank { border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:10px; padding:12px 16px 14px; background:var(--dsw-alias-bg-layer-1, #fff); display:flex; flex-direction:column; gap:7px; transition:transform .12s ease, border-color .12s ease; }",
+      ".tu-rank:hover { transform:scale(1.02); border-color:rgba(79,140,255,.55); }",
+      ".tu-rank-num { font-size:12px; font-weight:600; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.45)); font-variant-numeric:tabular-nums; letter-spacing:.08em; }",
+      ".tu-rank-main { display:flex; justify-content:space-between; align-items:baseline; gap:10px; min-width:0; }",
+      ".tu-rank-name { font-size:15px; font-weight:600; color:var(--dsw-alias-label-primary, #1a1a1a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }",
+      ".tu-rank-total { font-size:18px; font-weight:700; letter-spacing:-.02em; color:var(--dsw-alias-label-primary, #1a1a1a); line-height:1.15; flex:none; font-variant-numeric:tabular-nums; }",
+      ".tu-rank-sub { display:flex; justify-content:space-between; align-items:baseline; gap:10px; min-width:0; font-size:12px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); white-space:nowrap; }",
+      ".tu-rank-vendor { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }",
+      ".tu-rank-share { flex:none; font-weight:600; color:var(--dsw-alias-label-secondary, rgba(0,0,0,.65)); font-variant-numeric:tabular-nums; }",
       "@keyframes tu-tip-in { from { opacity:0; transform:translateY(3px) scale(.98); } to { opacity:1; transform:none; } }",
       ".tu-err { border:1px solid rgba(239,68,68,.5); background:rgba(239,68,68,.08); border-radius:8px; padding:8px 12px; font-size:12px; color:var(--dsw-alias-state-error-primary, #ef4444); }"
     ].join("\n")
 
     function fmtTokens(n) {
       if (n === null || n === undefined || isNaN(n)) return "—"
+      if (n >= 1e12) {
+        var t = n / 1e12
+        return (t >= 100 ? Math.round(t) : t.toFixed(1)) + "T"
+      }
+      if (n >= 1e9) {
+        var b = n / 1e9
+        return (b >= 100 ? Math.round(b) : b.toFixed(1)) + "B"
+      }
       if (n >= 1e8) return (n / 1e8).toFixed(2) + "亿"
       if (n >= 1e4) {
         var v = n / 1e4
@@ -94,78 +118,101 @@ window.__ModuleLoader__.load({
       var d = new Date(ts)
       return (d.getMonth() + 1) + "月" + d.getDate() + "日 · 周" + "日一二三四五六".charAt(d.getDay())
     }
-    // One row inside the hover tooltip: label left, value right.
-    function tipRow(label, value, key) {
-      return React.createElement("div", { key: key, className: "tu-tip-row" },
-        React.createElement("span", { className: "tu-tip-row-label" }, label),
-        React.createElement("span", { className: "tu-tip-row-value" }, value)
-      )
+    function fmtMD(ts) {
+      var d = new Date(ts)
+      return (d.getMonth() + 1) + "/" + d.getDate()
     }
-    // Hover tooltip card: date, total, then input / output / requests.
-    // Positioned imperatively (position:fixed) in a useEffect after mount, so
-    // it can flip above/below the cell and stay inside the viewport.
-    function TipCard(tip, tipRef) {
-      var c = tip.cell
-      var kids = [
-        React.createElement("span", { key: "ar", className: "tu-tip-arrow" }),
-        React.createElement("div", { key: "d", className: "tu-tip-date" }, fmtDayCN(c.ts)),
-        React.createElement("div", { key: "t", className: "tu-tip-total" },
-          fmtTokens(cardTotals(c.b)),
-          React.createElement("span", { className: "tu-tip-unit" }, "tokens")
-        )
-      ]
-      if (c.b) {
-        var rows = [
-          tipRow("输入", fmtTokens(c.b.inputTokens), 0),
-          tipRow("输出", fmtTokens(c.b.outputTokens), 1)
-        ]
-        rows.push(React.createElement("div", { key: "f", className: "tu-tip-foot" }, c.b.requests + " 次请求"))
-        kids.push(React.createElement("div", { key: "r", className: "tu-tip-rows" }, rows))
-      } else {
-        kids.push(React.createElement("div", { key: "e", className: "tu-tip-empty" }, "当日无模型调用"))
-      }
-      return React.createElement("div", { ref: tipRef, className: "tu-tip", role: "tooltip" }, kids)
+    function dayStart(ts) {
+      var d = new Date(ts)
+      d.setHours(0, 0, 0, 0)
+      return d.getTime()
+    }
+    function modelName(key) {
+      return key.slice(key.indexOf(":") + 1)
     }
     function cardTotals(b) {
       if (!b) return 0
       return b.inputTokens + b.outputTokens + b.cacheReadTokens + b.cacheWriteTokens
     }
 
-    // GitHub-style grid: columns are weeks (Sunday start), rows are weekdays.
-    function buildGraph(dailyList, now) {
-      var today = new Date(now)
-      today.setHours(0, 0, 0, 0)
-      var todayStart = today.getTime()
-      var start = todayStart - (GRAPH_DAYS - 1) * MS
-      var gridStart = start - new Date(start).getDay() * MS
-      var weeks = Math.ceil((todayStart - gridStart + 1) / (7 * MS))
-      var map = {}
-      for (var i = 0; i < dailyList.length; i++) map[dailyList[i].ts] = dailyList[i]
-      var cells = []
-      var max = 0
-      for (var i = 0; i < weeks * 7; i++) {
-        var ts = gridStart + i * MS
-        var b = map[ts]
-        var total = b ? cardTotals(b) : 0
-        if (ts > todayStart) total = -1 // future cell in the last column
-        if (total > max) max = total
-        cells.push({ ts: ts, total: total, b: b })
+    // Tooltip card (style follows temp/tooltip.png): date row, big total with
+    // a small "总计" suffix, then one colored-swatch row per model with
+    // right-aligned values and no separators. Positioned imperatively
+    // (position:fixed) in a useEffect, flipping above/below the hovered bar.
+    function TipCard(tip, tipRef, mGrid) {
+      var col = null
+      for (var i = 0; i < mGrid.cols.length; i++) {
+        if (mGrid.cols[i].ts === tip.ts) { col = mGrid.cols[i]; break }
       }
-      var months = []
-      var prev = -1
-      for (var w = 0; w < weeks; w++) {
-        var d = new Date(gridStart + w * 7 * MS)
-        var m = d.getFullYear() * 100 + d.getMonth()
-        months.push(m !== prev ? (d.getMonth() + 1) + "月" : "")
-        prev = m
+      var kids = [
+        React.createElement("span", { key: "ar", className: "tu-tip-arrow" }),
+        React.createElement("div", { key: "d", className: "tu-tip-date" }, fmtDayCN(tip.ts)),
+        React.createElement("div", { key: "t", className: "tu-tip-total" },
+          fmtTokens(col ? col.total : 0),
+          React.createElement("span", { className: "tu-tip-unit" }, "总计")
+        )
+      ]
+      var rows = []
+      if (col && col.segs.length > 0) {
+        for (var s = 0; s < col.segs.length; s++) {
+          var seg = col.segs[s]
+          rows.push(React.createElement("div", { key: seg.key, className: "tu-tip-row" },
+            React.createElement("span", { className: "tu-tip-row-label" },
+              React.createElement("span", { className: "tu-tip-dot", style: { backgroundColor: seg.color } }),
+              seg.name
+            ),
+            React.createElement("span", { className: "tu-tip-row-value" }, fmtTokens(seg.total))
+          ))
+        }
+      } else {
+        rows.push(React.createElement("div", { key: "e", className: "tu-tip-empty" }, "当日无模型调用"))
       }
-      return { cells: cells, weeks: weeks, months: months, max: max }
+      kids.push(React.createElement("div", { key: "r", className: "tu-tip-rows" }, rows))
+      return React.createElement("div", { ref: tipRef, className: "tu-tip", role: "tooltip" }, kids)
     }
-    function cellLevel(total, max) {
-      if (total <= 0) return 0
-      if (total >= max || max <= 0) return 4
-      var r = total / max
-      return r <= 0.25 ? 1 : r <= 0.5 ? 2 : r <= 0.75 ? 3 : 4
+
+    // 30-day stacked chart grid: fixed day columns, one colored segment per
+    // model. segs stay sorted by that day's usage DESCENDING (heaviest first)
+    // for the tooltip rows; the column renderer reverses them so the heaviest
+    // sits at the bottom. Colors are fixed by the 30-day usage rank
+    // (`colorOrder`).
+    function buildModelGrid(colorOrder, modelDaily30, now) {
+      var todayStart = dayStart(now)
+      var map = {}
+      for (var i = 0; i < modelDaily30.length; i++) map[modelDaily30[i].ts] = modelDaily30[i].models
+      var order = []
+      var seen = {}
+      for (var i = 0; i < colorOrder.length; i++) {
+        if (!seen[colorOrder[i].key]) { seen[colorOrder[i].key] = true; order.push(colorOrder[i].key) }
+      }
+      for (var i = 0; i < modelDaily30.length; i++) {
+        var ms = modelDaily30[i].models
+        for (var k in ms) if (!seen[k]) { seen[k] = true; order.push(k) }
+      }
+      var colorOf = {}
+      for (var i = 0; i < order.length; i++) colorOf[order[i]] = MODEL_COLORS[i % MODEL_COLORS.length]
+      var cols = []
+      var max = 0
+      for (var d = 0; d < MODEL_WINDOW; d++) {
+        var ts = todayStart - (MODEL_WINDOW - 1 - d) * MS
+        var dayModels = map[ts] || null
+        var segs = []
+        var total = 0
+        if (dayModels) {
+          for (var oi = 0; oi < order.length; oi++) {
+            var key = order[oi]
+            var mm = dayModels[key]
+            if (!mm) continue
+            var t = mm.inputTokens + mm.outputTokens + mm.cacheReadTokens + mm.cacheWriteTokens
+            if (t > 0) segs.push({ key: key, name: modelName(key), total: t, color: colorOf[key] })
+          }
+          segs.sort(function (a, b) { return b.total - a.total })
+          for (var s = 0; s < segs.length; s++) total += segs[s].total
+        }
+        if (total > max) max = total
+        cols.push({ ts: ts, total: total, segs: segs })
+      }
+      return { cols: cols, max: max }
     }
 
     // One metric card: label, big value, optional small sub-line.
@@ -174,6 +221,24 @@ window.__ModuleLoader__.load({
         React.createElement("div", { className: "tu-card-label" }, label),
         React.createElement("div", { className: "tu-card-value" }, value),
         sub ? React.createElement("div", { className: "tu-card-sub" }, sub) : null
+      )
+    }
+
+    // One ranking card: rank number on its own line, then model + token total,
+    // then provider + usage share (no color swatch, per user preference).
+    function RankCard(m, i, rankSum) {
+      var share = rankSum > 0 ? (m.total / rankSum) * 100 : 0
+      var shareTxt = (share >= 10 ? share.toFixed(1) : share.toFixed(2)) + "%"
+      return React.createElement("div", { key: m.key, className: "tu-rank" },
+        React.createElement("div", { className: "tu-rank-num" }, String(i + 1).padStart(2, "0")),
+        React.createElement("div", { className: "tu-rank-main" },
+          React.createElement("span", { className: "tu-rank-name" }, m.model),
+          React.createElement("span", { className: "tu-rank-total" }, fmtTokens(m.total))
+        ),
+        React.createElement("div", { className: "tu-rank-sub" },
+          React.createElement("span", { className: "tu-rank-vendor" }, m.provider),
+          React.createElement("span", { className: "tu-rank-share" }, shareTxt)
+        )
       )
     }
 
@@ -187,10 +252,11 @@ window.__ModuleLoader__.load({
       var errState = React.useState(null)
       var error = errState[0]
       var setError = errState[1]
-      var tipState = React.useState(null)
-      var tip = tipState[0]
-      var setTip = tipState[1]
-      var tipRef = React.useRef(null)
+      // pinned breakdown card: { ts, rect, pinned }
+      var mTipState = React.useState(null)
+      var mTip = mTipState[0]
+      var setMTip = mTipState[1]
+      var mTipRef = React.useRef(null)
 
       var load = function (backfill) {
         setBusy(true)
@@ -215,17 +281,27 @@ window.__ModuleLoader__.load({
         return function () { clearInterval(id) }
       }, [])
 
-      // hover tooltip: remember the cell and its screen rect; TipCard
-      // positions itself from these numbers once mounted
-      var onCellEnter = function (c, e) {
+      // chart interaction: hovering a bar shows the breakdown card, clicking
+      // pins it (clicking again unpins); no highlight/scale effects on bars.
+      var onBarEnter = function (c, e) {
         var t = e.currentTarget.getBoundingClientRect()
-        setTip({ cell: c, rect: { left: t.left, top: t.top, width: t.width, height: t.height } })
+        setMTip({ ts: c.ts, rect: { left: t.left, top: t.top, width: t.width, height: t.height }, pinned: false })
       }
-      var onCellLeave = function () { setTip(null) }
+      var onBarLeave = function () {
+        setMTip(function (cur) { return cur && cur.pinned ? cur : null })
+      }
+      var onBarClick = function (c, e) {
+        var t = e.currentTarget.getBoundingClientRect()
+        setMTip(function (cur) {
+          if (cur && cur.ts === c.ts) return cur.pinned ? null : { ts: c.ts, rect: cur.rect, pinned: true }
+          return { ts: c.ts, rect: { left: t.left, top: t.top, width: t.width, height: t.height }, pinned: true }
+        })
+      }
 
-      React.useEffect(function () {
-        if (!tip) return
-        var el = tipRef.current
+      // position the fixed tooltip card against the hovered element's rect:
+      // flip above/below, clamp to the viewport, point the arrow at it
+      function positionTip(tip, ref) {
+        var el = ref.current
         if (!el) return
         var r = el.getBoundingClientRect()
         var c = tip.rect
@@ -233,41 +309,47 @@ window.__ModuleLoader__.load({
         var vw = window.innerWidth
         var left = c.left + c.width / 2 - r.width / 2
         left = Math.max(8, Math.min(left, Math.max(8, vw - r.width - 8)))
-        // flip below the cell when there is no room above it
         var above = c.top - gap - r.height >= 8
         var top = above ? c.top - gap - r.height : c.bottom + gap
         el.style.left = Math.round(left) + "px"
         el.style.top = Math.round(top) + "px"
-        // re-trigger the fade-in so it plays from the moment of showing
         el.style.animation = "none"
         void el.offsetWidth
         el.style.animation = ""
         el.style.visibility = "visible"
-        // point the arrow at the hovered cell, keeping it inside the card
         var arrow = el.querySelector(".tu-tip-arrow")
         if (arrow) {
           arrow.className = "tu-tip-arrow " + (above ? "tu-tip-arrow-down" : "tu-tip-arrow-up")
           arrow.style.left = Math.max(8, Math.min(c.left + c.width / 2 - left, r.width - 16)) + "px"
         }
-      }, [tip])
+      }
+
+      React.useEffect(function () {
+        if (mTip) positionTip(mTip, mTipRef)
+      }, [mTip])
 
       // the tip is positioned against the viewport: hide it on scroll/resize
       React.useEffect(function () {
-        if (!tip) return
-        var hide = function () { setTip(null) }
+        if (!mTip) return
+        var hide = function () { setMTip(null) }
         window.addEventListener("scroll", hide, true)
         window.addEventListener("resize", hide)
         return function () {
           window.removeEventListener("scroll", hide, true)
           window.removeEventListener("resize", hide)
         }
-      }, [tip])
+      }, [mTip])
 
       var totals = snap ? snap.totals : null
       var sessions = snap ? snap.sessions : null
-      var daily = snap ? snap.daily : []
-      var graph = snap ? buildGraph(daily, snap.now) : null
-      var weeks = graph ? graph.weeks : 0
+      // ranking is fixed to the 30-day window (no base switcher)
+      var rank = snap && snap.modelRank ? snap.modelRank.d30 : []
+      // sum of all models in the 30-day window, for the per-card usage share
+      var rankSum = 0
+      for (var ri = 0; ri < rank.length; ri++) rankSum += rank[ri].total
+      // chart color order is fixed by the 30-day rank so colors stay stable
+      // across polls
+      var mGrid = snap ? buildModelGrid(snap.modelRank.d30, snap.modelDaily30 || [], snap.now) : null
 
       return React.createElement("div", { className: "tu-root" },
         React.createElement("div", { className: "tu-head" },
@@ -292,46 +374,52 @@ window.__ModuleLoader__.load({
           Card("近 7 天会话", String(sessions.d7), totals ? totals.d7.requests + " 次请求" : ""),
           Card("近 30 天会话", String(sessions.d30), totals ? totals.d30.requests + " 次请求" : "")
         ),
-        React.createElement("div", { className: "tu-head" },
-          React.createElement("span", { className: "tu-title" }, "近 90 天每日用量"),
-          React.createElement("div", { className: "tu-legend" },
-            React.createElement("span", null, "少"),
-            [0, 1, 2, 3, 4].map(function (l) {
-              return React.createElement("span", { key: l, className: "tu-swatch", style: { backgroundColor: LEVEL_COLORS[l] } })
-            }),
-            React.createElement("span", null, "多")
-          )
-        ),
-        graph && (graph.max === 0
-          ? React.createElement("div", { className: "tu-meta" }, "暂无用量数据——插件启动后（或点击「回填历史」后）的每次模型调用都会出现在这里。")
-          : React.createElement("div", { className: "tu-graph" },
-              React.createElement("div", { className: "tu-graph-months", style: { gridTemplateColumns: "repeat(" + weeks + ", minmax(8px, 1fr))" } },
-                graph.months.map(function (m, w) {
-                  return React.createElement("span", { key: w, className: "tu-month" }, m)
-                })
-              ),
-              React.createElement("div", { className: "tu-graph-body" },
-                React.createElement("div", { className: "tu-graph-labels" },
-                  ["", "一", "", "三", "", "五", ""].map(function (lbl, r) {
-                    return React.createElement("span", { key: r }, lbl)
-                  })
-                ),
-                React.createElement("div", { className: "tu-graph-cells", style: { gridTemplateColumns: "repeat(" + weeks + ", minmax(8px, 1fr))" } },
-                  graph.cells.map(function (c, i) {
-                    var future = c.total < 0
+        React.createElement("div", { className: "tu-msec" },
+          React.createElement("div", { className: "tu-head" },
+            React.createElement("span", { className: "tu-title" }, "近 30 天模型使用情况")
+          ),
+          mGrid && (mGrid.max === 0
+            ? React.createElement("div", { className: "tu-meta" }, NO_DATA_MSG)
+            : React.createElement("div", { className: "tu-mchart" },
+                React.createElement("div", { className: "tu-mbars" },
+                  mGrid.cols.map(function (c, i) {
+                    var kids = []
+                    if (c.total > 0) {
+                      // segs are sorted desc (heaviest first) for the tooltip;
+                      // render them in REVERSE so the heaviest segment sits at
+                      // the bottom of the column (flex-end aligns the group to
+                      // the bottom but preserves document order)
+                      for (var s = c.segs.length - 1; s >= 0; s--) {
+                        var seg = c.segs[s]
+                        var h = Math.max(2, Math.round(seg.total / mGrid.max * BAR_HEIGHT))
+                        kids.push(React.createElement("div", { key: seg.key, className: "tu-mseg", style: { backgroundColor: seg.color, height: h + "px" } }))
+                      }
+                    }
                     return React.createElement("div", {
                       key: i,
-                      className: "tu-cell" + (future ? " tu-cell-future" : "") + (tip && tip.cell.ts === c.ts ? " tu-cell-hover" : ""),
-                      style: future ? undefined : { backgroundColor: LEVEL_COLORS[cellLevel(c.total, graph.max)] },
-                      onMouseEnter: future ? null : function (e) { onCellEnter(c, e) },
-                      onMouseLeave: future ? null : onCellLeave
-                    })
+                      className: "tu-mcol",
+                      onMouseEnter: function (e) { onBarEnter(c, e) },
+                      onMouseLeave: onBarLeave,
+                      onClick: function (e) { onBarClick(c, e) }
+                    }, kids)
+                  })
+                ),
+                React.createElement("div", { className: "tu-mlabels" },
+                  mGrid.cols.map(function (c, i) {
+                    // baseline labels: Mondays only
+                    var show = new Date(c.ts).getDay() === 1
+                    return React.createElement("span", { key: i, className: "tu-mlabel" }, show ? fmtMD(c.ts) : "")
                   })
                 )
               )
-            )
+          )
         ),
-        tip && TipCard(tip, tipRef)
+        rank.length === 0
+          ? React.createElement("div", { className: "tu-meta" }, NO_DATA_MSG)
+          : React.createElement("div", { className: "tu-mrank" },
+              rank.slice(0, 4).map(function (m, i) { return RankCard(m, i, rankSum) })
+            ),
+        mTip && mGrid && TipCard(mTip, mTipRef, mGrid)
       )
     }
 

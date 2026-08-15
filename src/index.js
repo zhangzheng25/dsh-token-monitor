@@ -5,14 +5,16 @@
  *
  * Jobs:
  *  1. Listen to the `llm/stream` waterfall and fold every real model call's
- *     provider-reported TokenUsage into in-memory daily buckets.
+ *     provider-reported TokenUsage into in-memory daily buckets, split by
+ *     model (request options carry provider/model) and by day.
  *  2. Backfill historical usage from the session corpus via `sessionQuery`
- *     (`assistant/message` usage events), so the dashboard shows today / 7 /
- *     30 days even for usage that predates this plugin's install.
+ *     (`assistant/message` usage events, model from `message.source`), so the
+ *     dashboard shows today / 7 / 30 days even for usage that predates this
+ *     plugin's install.
  *  3. Track conversation counts per workspace (top-level sessions only,
  *     `delegationDepth === 0`, grouped by header `cwd`).
  *  4. Persist buckets to $DSH_HOME/plugins/token-monitor/data.json so history
- *     survives restarts (daily buckets kept 91 days).
+ *     survives restarts (daily buckets kept 181 days).
  *  5. Serve /token-monitor/snapshot through the `webServer` service for the
  *     browser half (static-bundle pattern: plain fetch, no harness.handle).
  */
@@ -21,7 +23,12 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const DAILY_KEEP_MS = 91 * 86400 * 1000
+// 181 days: retention window for the daily buckets. Covers the per-model
+// windows (up to 60 days for the 30-day growth baseline) plus headroom; also
+// the window the backfill rebuilds after a schema migration.
+const DAILY_KEEP_MS = 181 * 86400 * 1000
+/** data.json schema version; v3 widens the retention window to 181 days. */
+const SAVED_VERSION = 3
 
 function dataFile() {
   const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
@@ -43,6 +50,19 @@ function dayKey(ts) {
 function emptyBucket(ts) {
   return {
     ts,
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    // per-model fold: modelKey ("provider:model") -> emptyModelBucket()
+    models: {},
+  }
+}
+
+function emptyModelBucket() {
+  return {
     requests: 0,
     inputTokens: 0,
     outputTokens: 0,
@@ -79,9 +99,17 @@ module.exports = {
     try {
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'))
       if (saved && typeof saved === 'object') {
-        for (const b of saved.daily || []) if (b && b.ts) daily.set(b.ts, b)
         if (saved.trackingSince) trackingSince = saved.trackingSince
-        if (saved.backfilledUntil) backfilledUntil = saved.backfilledUntil
+        if (saved.version === SAVED_VERSION) {
+          for (const b of saved.daily || []) if (b && b.ts) daily.set(b.ts, b)
+          if (saved.backfilledUntil) backfilledUntil = saved.backfilledUntil
+        } else {
+          // v1/v2 -> v3 migration: older buckets predate the 181-day retention
+          // window (or the per-model breakdown). Drop them and reset the
+          // backfill cursor; the startup full backfill rebuilds the whole
+          // window from the session corpus (source of truth).
+          backfilledUntil = 0
+        }
       }
     } catch {
       /* first run — start fresh */
@@ -92,7 +120,28 @@ module.exports = {
       for (const k of daily.keys()) if (k < now - DAILY_KEEP_MS) daily.delete(k)
     }
 
-    function recordUsage(usage, ts) {
+    /** Model identity for a live llm/stream call, from the waterfall options (provider/model on the request). */
+    function liveModelKey(options) {
+      try {
+        const provider = options && options.provider
+        const model = options && options.model
+        return provider && model ? String(provider) + ':' + String(model) : null
+      } catch {
+        return null
+      }
+    }
+
+    /** Model identity for a session-log assistant/message event, from message.source. */
+    function sourceModelKey(data) {
+      try {
+        const src = data && data.message && data.message.source
+        return src && src.provider && src.model ? String(src.provider) + ':' + String(src.model) : 'unknown'
+      } catch {
+        return 'unknown'
+      }
+    }
+
+    function recordUsage(usage, ts, modelKey) {
       const at = ts || Date.now()
       const dk = dayKey(at)
       let d = daily.get(dk)
@@ -106,6 +155,19 @@ module.exports = {
       d.cacheReadTokens += usage.cacheReadTokens || 0
       d.cacheWriteTokens += usage.cacheWriteTokens || 0
       d.reasoningTokens += usage.reasoningTokens || 0
+      if (modelKey) {
+        let m = d.models[modelKey]
+        if (!m) {
+          m = emptyModelBucket()
+          d.models[modelKey] = m
+        }
+        m.requests += 1
+        m.inputTokens += usage.inputTokens || 0
+        m.outputTokens += usage.outputTokens || 0
+        m.cacheReadTokens += usage.cacheReadTokens || 0
+        m.cacheWriteTokens += usage.cacheWriteTokens || 0
+        m.reasoningTokens += usage.reasoningTokens || 0
+      }
       prune()
       scheduleSave()
     }
@@ -113,13 +175,14 @@ module.exports = {
     // ── live capture: every real model call ────────────────────────────────
     // Waterfall event: MUST call next() and forward the stream untouched,
     // otherwise the model call breaks.
-    ctx.on('llm/stream', (_options, next) => {
+    ctx.on('llm/stream', (options, next) => {
       const inner = next()
+      const modelKey = liveModelKey(options)
       return (async function* () {
         for await (const chunk of inner) {
           if (chunk && chunk.type === 'usage' && chunk.usage) {
             try {
-              recordUsage(chunk.usage)
+              recordUsage(chunk.usage, undefined, modelKey)
             } catch {
               // accounting must never break the stream
             }
@@ -152,7 +215,7 @@ module.exports = {
             if (!ev || ev.time <= backfilledUntil) continue
             if (ev.type === 'assistant/message' && ev.data && ev.data.usage) {
               try {
-                recordUsage(ev.data.usage, ev.time)
+                recordUsage(ev.data.usage, ev.time, sourceModelKey(ev.data))
               } catch {
                 // keep going
               }
@@ -177,6 +240,7 @@ module.exports = {
         fs.writeFileSync(
           file,
           JSON.stringify({
+            version: SAVED_VERSION,
             trackingSince,
             backfilledUntil,
             daily: [...daily.values()].filter((b) => b.ts >= now - DAILY_KEEP_MS),
@@ -260,6 +324,63 @@ module.exports = {
       return t
     }
 
+    function modelTotal(m) {
+      return m.inputTokens + m.outputTokens + m.cacheReadTokens + m.cacheWriteTokens
+    }
+
+    /** Fold per-model buckets across a bucket list into a modelKey -> totals map. */
+    function sumModels(buckets) {
+      const map = {}
+      for (const b of buckets) {
+        const ms = b.models || {}
+        for (const key of Object.keys(ms)) {
+          const m = ms[key]
+          let t = map[key]
+          if (!t) {
+            t = emptyModelBucket()
+            map[key] = t
+          }
+          t.requests += m.requests
+          t.inputTokens += m.inputTokens
+          t.outputTokens += m.outputTokens
+          t.cacheReadTokens += m.cacheReadTokens
+          t.cacheWriteTokens += m.cacheWriteTokens
+          t.reasoningTokens += m.reasoningTokens
+        }
+      }
+      return map
+    }
+
+    /** Per-model ranking for one window: sorted by total desc, growth vs the
+     *  immediately previous window of the same length. */
+    function buildModelRank(buckets, todayStart, days) {
+      const ms = 86400 * 1000
+      const cur = sumModels(buckets.filter((b) => b.ts >= todayStart - (days - 1) * ms))
+      const prev = sumModels(buckets.filter((b) => b.ts >= todayStart - (2 * days - 1) * ms && b.ts < todayStart - days * ms))
+      const list = []
+      for (const key of Object.keys(cur)) {
+        const t = cur[key]
+        const prevTotal = prev[key] ? modelTotal(prev[key]) : 0
+        const curTotal = modelTotal(t)
+        const sep = key.indexOf(':')
+        list.push({
+          key,
+          provider: sep > 0 ? key.slice(0, sep) : key,
+          model: sep > 0 ? key.slice(sep + 1) : key,
+          requests: t.requests,
+          inputTokens: t.inputTokens,
+          outputTokens: t.outputTokens,
+          cacheReadTokens: t.cacheReadTokens,
+          cacheWriteTokens: t.cacheWriteTokens,
+          reasoningTokens: t.reasoningTokens,
+          total: curTotal,
+          growth: prevTotal > 0 ? (curTotal - prevTotal) / prevTotal : null,
+        })
+      }
+      list.sort((a, b) => b.total - a.total)
+      return list
+    }
+
     async function buildSnapshot() {
       const now = Date.now()
       const todayStart = dayKey(now)
@@ -267,17 +388,24 @@ module.exports = {
       const today = sumBuckets(buckets.filter((b) => b.ts === todayStart))
       const d7 = sumBuckets(buckets.filter((b) => b.ts >= todayStart - 6 * 86400 * 1000))
       const d30 = sumBuckets(buckets.filter((b) => b.ts >= todayStart - 29 * 86400 * 1000))
-      const dailyList = buckets
-        .filter((b) => b.ts >= todayStart - 89 * 86400 * 1000)
-        .sort((a, b) => a.ts - b.ts)
       return {
         ok: true,
         now,
         trackingSince,
         backfilledUntil,
         totals: { today, d7, d30 },
-        daily: dailyList,
         sessions: await buildSessionStats(),
+        modelRank: {
+          today: buildModelRank(buckets, todayStart, 1),
+          d7: buildModelRank(buckets, todayStart, 7),
+          d30: buildModelRank(buckets, todayStart, 30),
+        },
+        // per-day per-model breakdown for the 30-day stacked bar chart
+        // (non-empty days only: { ts, models })
+        modelDaily30: buckets
+          .filter((b) => b.ts >= todayStart - 29 * 86400 * 1000 && Object.keys(b.models || {}).length > 0)
+          .sort((a, b) => a.ts - b.ts)
+          .map((b) => ({ ts: b.ts, models: b.models })),
       }
     }
 
