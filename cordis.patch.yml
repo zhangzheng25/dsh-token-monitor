@@ -7,5 +7,5 @@
 # composition (this insert), never inside an agent preset.
 
 - insert:
-    - id: token-usage
+    - id: token-monitor
       name: 'dsh-token-monitor'

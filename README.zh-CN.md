@@ -14,7 +14,7 @@
 - 📈 **GitHub 风格提交图** — 近 90 天每日用量热力图，占满整行宽度；按当日 token 量分 5 档颜色深浅，悬停查看当天明细（输入 / 输出 / 缓存 / 请求数）。
 - 💬 **会话统计** — 今日 / 近 7 天 / 近 30 天开启的顶层对话数（不含子代理内部会话），副文字显示对应时段的模型请求次数。
 - 🔄 **自动刷新** — 页面每 30 秒轮询，另有手动「刷新」与「回填历史」按钮。
-- 💾 **持久化** — 数据写入 `$DSH_HOME/plugins/token-usage/data.json`，重启不丢（按天桶保留 91 天）。
+- 💾 **持久化** — 数据写入 `$DSH_HOME/plugins/token-monitor/data.json`，重启不丢（按天桶保留 91 天）。
 - 🕘 **历史回填** — 启动时（及点击「回填历史」时）通过 `sessionQuery` 扫描会话日志，把插件安装**之前**的用量也统计进来。
 - 🎨 **DSH 原生风格** — 亮色主题、1px 细边框卡片、8–10px 圆角、无阴影；颜色走 `--ds-*` 主题变量，跟随 DSH 深色主题。
 
@@ -48,11 +48,11 @@ dsh plugin --profile web add E:\path\to\dsh-token-monitor
 │  • buildSessionStats()      ← 顶层对话统计（delegationDepth === 0）│
 │      （20 秒缓存）                                                 │
 │  • persist()                ← 防抖写入                              │
-│      $DSH_HOME/plugins/token-usage/data.json                       │
-│  • webServer.register('/token-usage/snapshot') ← 供 Client 读取     │
+│      $DSH_HOME/plugins/token-monitor/data.json                      │
+│  • webServer.register('/token-monitor/snapshot') ← 供 Client 读取   │
 │      （静态 bundle 模式）                                          │
 └─────────────────────────────────────────────────────────────────────┘
-                          │ fetch('/token-usage/snapshot')
+                          │ fetch('/token-monitor/snapshot')
                           ▼
 ┌────────────────────────── Client（浏览器）─────────────────────────┐
 │ client/bundle.js — 手工构建的 web bundle，符合 client-modules 协议  │

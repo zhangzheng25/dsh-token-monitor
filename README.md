@@ -14,7 +14,7 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin tha
 - 📈 **GitHub-style contribution graph** — last 90 days, stretches across the full content width; 5-level color intensity by daily token volume; hover a cell for the per-day breakdown (input / output / cache / requests).
 - 💬 **Conversation stats** — top-level conversations opened today / 7 days / 30 days (subagent sessions excluded), with the corresponding model request counts.
 - 🔄 **Auto refresh** — 30 s polling plus manual "刷新 / Refresh" and "回填历史 / Backfill" buttons.
-- 💾 **Persistence** — buckets are written to `$DSH_HOME/plugins/token-usage/data.json` and survive restarts (91-day daily buckets).
+- 💾 **Persistence** — buckets are written to `$DSH_HOME/plugins/token-monitor/data.json` and survive restarts (91-day daily buckets).
 - 🕘 **Historical backfill** — on startup (or on demand) the plugin scans session logs via `sessionQuery`, so usage from *before* the plugin was installed is included too.
 - 🎨 **DSH-native styling** — light theme, 1 px hairline cards, 8–10 px radii, no shadows; colors use `--ds-*` theme variables so it follows DSH's dark theme as well.
 
@@ -49,11 +49,11 @@ dsh plugin --profile web add E:\path\to\dsh-token-monitor
 │  • buildSessionStats()      ← top-level conversation counts        │
 │      (delegationDepth === 0), 20 s cache                           │
 │  • persist()                ← debounced JSON write to              │
-│      $DSH_HOME/plugins/token-usage/data.json                       │
-│  • webServer.register('/token-usage/snapshot') ← HTTP route        │
+│      $DSH_HOME/plugins/token-monitor/data.json                     │
+│  • webServer.register('/token-monitor/snapshot') ← HTTP route      │
 │      consumed by the browser half (static-bundle pattern)          │
 └─────────────────────────────────────────────────────────────────────┘
-                          │ fetch('/token-usage/snapshot')
+                          │ fetch('/token-monitor/snapshot')
                           ▼
 ┌────────────────────────── Client (browser) ────────────────────────┐
 │ client/bundle.js — hand-built web bundle following the             │

@@ -11,9 +11,9 @@
  *     30 days even for usage that predates this plugin's install.
  *  3. Track conversation counts per workspace (top-level sessions only,
  *     `delegationDepth === 0`, grouped by header `cwd`).
- *  4. Persist buckets to $DSH_HOME/plugins/token-usage/data.json so history
+ *  4. Persist buckets to $DSH_HOME/plugins/token-monitor/data.json so history
  *     survives restarts (daily buckets kept 91 days).
- *  5. Serve /token-usage/snapshot through the `webServer` service for the
+ *  5. Serve /token-monitor/snapshot through the `webServer` service for the
  *     browser half (static-bundle pattern: plain fetch, no harness.handle).
  */
 
@@ -24,6 +24,12 @@ const path = require('node:path')
 const DAILY_KEEP_MS = 91 * 86400 * 1000
 
 function dataFile() {
+  const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+  return path.join(home, 'plugins', 'token-monitor', 'data.json')
+}
+
+/** Pre-rename storage path (plugin id was `token-usage`); migrated once on first load. */
+function legacyDataFile() {
   const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
   return path.join(home, 'plugins', 'token-usage', 'data.json')
 }
@@ -47,7 +53,7 @@ function emptyBucket(ts) {
 }
 
 module.exports = {
-  name: 'token-usage',
+  name: 'token-monitor',
   inject: ['timer', 'webServer'],
 
   apply(ctx) {
@@ -57,9 +63,21 @@ module.exports = {
     let dirty = false
     let saveTimer = null
 
-    // ── load persisted buckets ─────────────────────────────────────────────
+    // ── load persisted buckets (one-time migration from the legacy path) ──
+    const file = dataFile()
+    if (!fs.existsSync(file)) {
+      const legacy = legacyDataFile()
+      try {
+        if (fs.existsSync(legacy)) {
+          fs.mkdirSync(path.dirname(file), { recursive: true })
+          fs.renameSync(legacy, file)
+        }
+      } catch {
+        /* best-effort: a fresh start is fine */
+      }
+    }
     try {
-      const saved = JSON.parse(fs.readFileSync(dataFile(), 'utf8'))
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'))
       if (saved && typeof saved === 'object') {
         for (const b of saved.daily || []) if (b && b.ts) daily.set(b.ts, b)
         if (saved.trackingSince) trackingSince = saved.trackingSince
@@ -165,7 +183,7 @@ module.exports = {
           }),
         )
       } catch (e) {
-        if (ctx.logger) ctx.logger.warn('token-usage persist failed: ' + String((e && e.message) || e))
+        if (ctx.logger) ctx.logger.warn('token-monitor persist failed: ' + String((e && e.message) || e))
       }
     }
 
@@ -267,7 +285,7 @@ module.exports = {
     // ?backfill=1 triggers a session-corpus backfill before serving.
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact',
-      path: '/token-usage/snapshot',
+      path: '/token-monitor/snapshot',
       handler: async (req, res) => {
         try {
           const url = new URL(req.url || '/', 'http://dsh.local')

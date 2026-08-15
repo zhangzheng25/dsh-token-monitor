@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" })
     var React = require("react")
 
-    var SNAPSHOT_URL = "/token-usage/snapshot"
+    var SNAPSHOT_URL = "/token-monitor/snapshot"
     var MS = 86400000
     var GRAPH_DAYS = 90
     // DSH accent (#4f8cff family) with a neutral empty level.
@@ -255,7 +255,7 @@ window.__ModuleLoader__.load({
       if (slots === undefined) return
       slots.inject("settings.section", function () {
         return slots.register(
-          { name: "settings.section", id: "token-usage", order: 30, label: "Token 用量" },
+          { name: "settings.section", id: "token-monitor", order: 30, label: "Token 用量" },
           function () { return React.createElement(Panel) }
         )
       })
