@@ -55,8 +55,23 @@ window.__ModuleLoader__.load({
       ".tu-graph-cells { display:grid; grid-auto-flow:column; grid-template-rows:repeat(7,auto); gap:3px; flex:1; width:100%; }",
       ".tu-cell { width:100%; aspect-ratio:1; border-radius:3px; }",
       ".tu-cell-future { visibility:hidden; }",
+      ".tu-cell-hover { outline:2px solid rgba(79,140,255,.85); outline-offset:1px; }",
       ".tu-legend { display:flex; align-items:center; gap:4px; font-size:10px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.6)); }",
       ".tu-swatch { width:10px; height:10px; border-radius:2px; }",
+      ".tu-tip { position:fixed; z-index:1000; visibility:hidden; box-sizing:border-box; width:184px; background:var(--dsw-alias-bg-layer-2, #fff); border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:10px; box-shadow:var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.12)); padding:10px 12px 9px; pointer-events:none; animation:tu-tip-in .14s ease-out; }",
+      ".tu-tip-arrow { position:absolute; width:8px; height:8px; background:var(--dsw-alias-bg-layer-2, #fff); }",
+      ".tu-tip-arrow-down { bottom:-4px; transform:rotate(45deg); border-right:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-bottom:1px solid var(--dsw-alias-border-l2, #e5e5e5); }",
+      ".tu-tip-arrow-up { top:-4px; transform:rotate(45deg); border-left:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-top:1px solid var(--dsw-alias-border-l2, #e5e5e5); }",
+      ".tu-tip-date { font-size:11px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.6)); }",
+      ".tu-tip-total { font-size:20px; font-weight:700; line-height:1.25; margin:2px 0 8px; letter-spacing:-.01em; color:var(--dsw-alias-label-primary, #1a1a1a); }",
+      ".tu-tip-unit { font-size:12px; font-weight:400; color:var(--dsw-alias-label-secondary, rgba(0,0,0,.6)); margin-left:5px; }",
+      ".tu-tip-rows { border-top:1px solid var(--dsw-alias-border-l1, #e8e8e8); padding-top:6px; display:flex; flex-direction:column; gap:3px; }",
+      ".tu-tip-row { display:flex; justify-content:space-between; gap:14px; font-size:12px; line-height:16px; }",
+      ".tu-tip-row-label { color:var(--dsw-alias-label-secondary, rgba(0,0,0,.6)); white-space:nowrap; }",
+      ".tu-tip-row-value { color:var(--dsw-alias-label-primary, #1a1a1a); font-variant-numeric:tabular-nums; }",
+      ".tu-tip-foot { margin-top:6px; font-size:11px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
+      ".tu-tip-empty { font-size:12px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
+      "@keyframes tu-tip-in { from { opacity:0; transform:translateY(3px) scale(.98); } to { opacity:1; transform:none; } }",
       ".tu-err { border:1px solid rgba(239,68,68,.5); background:rgba(239,68,68,.08); border-radius:8px; padding:8px 12px; font-size:12px; color:var(--dsw-alias-state-error-primary, #ef4444); }"
     ].join("\n")
 
@@ -75,9 +90,41 @@ window.__ModuleLoader__.load({
       var p = function (x) { return String(x).padStart(2, "0") }
       return p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes())
     }
-    function fmtDay(ts) {
+    function fmtDayCN(ts) {
       var d = new Date(ts)
-      return (d.getMonth() + 1) + "/" + d.getDate()
+      return (d.getMonth() + 1) + "月" + d.getDate() + "日 · 周" + "日一二三四五六".charAt(d.getDay())
+    }
+    // One row inside the hover tooltip: label left, value right.
+    function tipRow(label, value, key) {
+      return React.createElement("div", { key: key, className: "tu-tip-row" },
+        React.createElement("span", { className: "tu-tip-row-label" }, label),
+        React.createElement("span", { className: "tu-tip-row-value" }, value)
+      )
+    }
+    // Hover tooltip card: date, total, then input / output / requests.
+    // Positioned imperatively (position:fixed) in a useEffect after mount, so
+    // it can flip above/below the cell and stay inside the viewport.
+    function TipCard(tip, tipRef) {
+      var c = tip.cell
+      var kids = [
+        React.createElement("span", { key: "ar", className: "tu-tip-arrow" }),
+        React.createElement("div", { key: "d", className: "tu-tip-date" }, fmtDayCN(c.ts)),
+        React.createElement("div", { key: "t", className: "tu-tip-total" },
+          fmtTokens(cardTotals(c.b)),
+          React.createElement("span", { className: "tu-tip-unit" }, "tokens")
+        )
+      ]
+      if (c.b) {
+        var rows = [
+          tipRow("输入", fmtTokens(c.b.inputTokens), 0),
+          tipRow("输出", fmtTokens(c.b.outputTokens), 1)
+        ]
+        rows.push(React.createElement("div", { key: "f", className: "tu-tip-foot" }, c.b.requests + " 次请求"))
+        kids.push(React.createElement("div", { key: "r", className: "tu-tip-rows" }, rows))
+      } else {
+        kids.push(React.createElement("div", { key: "e", className: "tu-tip-empty" }, "当日无模型调用"))
+      }
+      return React.createElement("div", { ref: tipRef, className: "tu-tip", role: "tooltip" }, kids)
     }
     function cardTotals(b) {
       if (!b) return 0
@@ -140,6 +187,10 @@ window.__ModuleLoader__.load({
       var errState = React.useState(null)
       var error = errState[0]
       var setError = errState[1]
+      var tipState = React.useState(null)
+      var tip = tipState[0]
+      var setTip = tipState[1]
+      var tipRef = React.useRef(null)
 
       var load = function (backfill) {
         setBusy(true)
@@ -163,6 +214,54 @@ window.__ModuleLoader__.load({
         var id = setInterval(function () { load(false) }, 30000)
         return function () { clearInterval(id) }
       }, [])
+
+      // hover tooltip: remember the cell and its screen rect; TipCard
+      // positions itself from these numbers once mounted
+      var onCellEnter = function (c, e) {
+        var t = e.currentTarget.getBoundingClientRect()
+        setTip({ cell: c, rect: { left: t.left, top: t.top, width: t.width, height: t.height } })
+      }
+      var onCellLeave = function () { setTip(null) }
+
+      React.useEffect(function () {
+        if (!tip) return
+        var el = tipRef.current
+        if (!el) return
+        var r = el.getBoundingClientRect()
+        var c = tip.rect
+        var gap = 8
+        var vw = window.innerWidth
+        var left = c.left + c.width / 2 - r.width / 2
+        left = Math.max(8, Math.min(left, Math.max(8, vw - r.width - 8)))
+        // flip below the cell when there is no room above it
+        var above = c.top - gap - r.height >= 8
+        var top = above ? c.top - gap - r.height : c.bottom + gap
+        el.style.left = Math.round(left) + "px"
+        el.style.top = Math.round(top) + "px"
+        // re-trigger the fade-in so it plays from the moment of showing
+        el.style.animation = "none"
+        void el.offsetWidth
+        el.style.animation = ""
+        el.style.visibility = "visible"
+        // point the arrow at the hovered cell, keeping it inside the card
+        var arrow = el.querySelector(".tu-tip-arrow")
+        if (arrow) {
+          arrow.className = "tu-tip-arrow " + (above ? "tu-tip-arrow-down" : "tu-tip-arrow-up")
+          arrow.style.left = Math.max(8, Math.min(c.left + c.width / 2 - left, r.width - 16)) + "px"
+        }
+      }, [tip])
+
+      // the tip is positioned against the viewport: hide it on scroll/resize
+      React.useEffect(function () {
+        if (!tip) return
+        var hide = function () { setTip(null) }
+        window.addEventListener("scroll", hide, true)
+        window.addEventListener("resize", hide)
+        return function () {
+          window.removeEventListener("scroll", hide, true)
+          window.removeEventListener("resize", hide)
+        }
+      }, [tip])
 
       var totals = snap ? snap.totals : null
       var sessions = snap ? snap.sessions : null
@@ -222,17 +321,17 @@ window.__ModuleLoader__.load({
                     var future = c.total < 0
                     return React.createElement("div", {
                       key: i,
-                      className: "tu-cell" + (future ? " tu-cell-future" : ""),
+                      className: "tu-cell" + (future ? " tu-cell-future" : "") + (tip && tip.cell.ts === c.ts ? " tu-cell-hover" : ""),
                       style: future ? undefined : { backgroundColor: LEVEL_COLORS[cellLevel(c.total, graph.max)] },
-                      title: future ? "" : fmtDay(c.ts) + " · " + fmtTokens(c.total) + " tokens" +
-                        (c.b ? " · 输入 " + fmtTokens(c.b.inputTokens) + " · 输出 " + fmtTokens(c.b.outputTokens) +
-                          " · 缓存 " + fmtTokens(c.b.cacheReadTokens + c.b.cacheWriteTokens) + " · " + c.b.requests + " 次请求" : "")
+                      onMouseEnter: future ? null : function (e) { onCellEnter(c, e) },
+                      onMouseLeave: future ? null : onCellLeave
                     })
                   })
                 )
               )
             )
-        )
+        ),
+        tip && TipCard(tip, tipRef)
       )
     }
 
