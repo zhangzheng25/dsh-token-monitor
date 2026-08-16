@@ -1,4 +1,4 @@
-/* dsh-token-monitor — Client half v2.4 (web bundle, built by hand to
+/* dsh-token-monitor — Client half v3.0 (web bundle, built by hand to
  * match the client-modules bundle protocol: window.__ModuleLoader__.load
  * registers a factory that receives a CommonJS require). This file is the
  * `./client` exports subpath declared in package.json.
@@ -7,12 +7,16 @@
  * APIs: `fetch` for the host snapshot route, `document` for styles. React is
  * resolved through require("react") like every other web plugin bundle.
  *
- * Registers a settings page ("Token 用量") into the root-scoped
- * `settings.section` slot: today / 7-day / 30-day token usage, conversation
- * counts, a 30-day per-model stacked bar chart (hover/click a day to pin the
- * breakdown card, styled after temp/tooltip.png), and a model usage ranking
- * fixed to the 30-day window (top-4 cards in a 2×2 grid: rank number on its
- * own line, model + token total, provider + usage share — no color swatch).
+ * Registers a "今日用量" card into the root-scoped `sidebar.footer.action`
+ * slot next to Settings: it shows today's token total (polling the light
+ * `/token-monitor/today` route) and opens a modal window on click that
+ * renders the full dashboard — today / 7-day / 30-day token usage,
+ * conversation counts, a 30-day per-model stacked bar chart (hover/click a
+ * day to pin the breakdown card, styled after temp/tooltip.png), and a model
+ * usage ranking fixed to the 30-day window (top-4 cards in a 2×2 grid: rank
+ * number on its own line, model + token total, provider + usage share — no
+ * color swatch). There is intentionally NO `settings.section` page anymore:
+ * the dashboard lives only in the sidebar card's popup.
  * Visual language follows the DSH theme tokens (--dsw-alias-*): flat cards,
  * 1px hairline borders, 8-12px radii, no shadows — and it adapts
  * automatically to DSH light and dark themes.
@@ -26,22 +30,26 @@ window.__ModuleLoader__.load({
     var React = require("react")
 
     var SNAPSHOT_URL = "/token-monitor/snapshot"
+    var TODAY_URL = "/token-monitor/today"
     var NO_DATA_MSG = "暂无模型用量数据——插件升级后点一次「回填历史」即可。"
     var MS = 86400000
     var MODEL_WINDOW = 30
     // chart plot height in px, shared by the CSS and the segment height math
     var BAR_HEIGHT = 116
-    // Per-model palette (pink → orange), assigned in usage-rank order.
+    // Per-model palette — morandi muted tones with THREE lightness tiers
+    // (dark: #54718f #5f8f93 / mid: #8b7fa8 #7f9c86 #b5816f #75826f / light:
+    // #c9ad6b #a8c0d8 #c9a3a8) and spread hues, so stacked segments stay
+    // clearly distinguishable while the overall look stays calm and cold.
     var MODEL_COLORS = [
-      "#f472b6",
-      "#a78bfa",
-      "#60a5fa",
-      "#22d3ee",
-      "#2dd4bf",
-      "#4ade80",
-      "#a3e635",
-      "#facc15",
-      "#fb923c"
+      "#54718f",
+      "#8b7fa8",
+      "#7f9c86",
+      "#b5816f",
+      "#c9ad6b",
+      "#5f8f93",
+      "#a8c0d8",
+      "#c9a3a8",
+      "#75826f"
     ]
 
     var CSS = [
@@ -72,11 +80,14 @@ window.__ModuleLoader__.load({
       ".tu-tip-empty { font-size:12px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
       ".tu-msec { display:flex; flex-direction:column; gap:8px; }",
       ".tu-mchart { border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:10px; padding:16px 16px 10px; background:var(--dsw-alias-bg-layer-1, #fff); }",
-      ".tu-mbars { display:flex; gap:2px; align-items:flex-end; height:" + BAR_HEIGHT + "px; cursor:pointer; }",
-      ".tu-mcol { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:flex-end; height:100%; background-image:radial-gradient(circle, rgba(127,127,127,.3) 1px, transparent 1.5px); background-size:13px 13px; background-position:center; }",
-      ".tu-mseg { width:100%; }",
-      ".tu-mlabels { display:flex; gap:2px; margin-top:4px; font-size:10px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
-      ".tu-mlabel { flex:1; min-width:0; overflow:visible; white-space:nowrap; }",
+      ".tu-mbars { display:flex; gap:4px; align-items:flex-end; height:" + BAR_HEIGHT + "px; cursor:pointer; }",
+      ".tu-mcol { flex:1; min-width:0; box-sizing:border-box; padding:0 2px; display:flex; flex-direction:column; justify-content:flex-end; height:100%; background-image:radial-gradient(circle, rgba(127,127,127,.3) 1px, transparent 1.5px), radial-gradient(circle, rgba(127,127,127,.3) 1px, transparent 1.5px); background-size:4px 13px, 4px 13px; background-position:25% 0, 75% 0; background-repeat:repeat-y, repeat-y; }",
+      ".tu-mseg { width:100%; box-sizing:border-box; }",
+      // seam between stacked model segments: a 1px card-colored border so the
+      // dot grid never shows THROUGH the bar — dots only appear above it
+      ".tu-mseg:not(:last-child) { border-bottom:1px solid var(--dsw-alias-bg-layer-1, #fff); }",
+      ".tu-mlabels { display:flex; gap:4px; margin-top:4px; font-size:10px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); }",
+      ".tu-mlabel { flex:1; min-width:0; overflow:visible; white-space:nowrap; text-align:center; }",
       ".tu-mrank { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }",
       ".tu-rank { border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:10px; padding:12px 16px 14px; background:var(--dsw-alias-bg-layer-1, #fff); display:flex; flex-direction:column; gap:7px; transition:transform .12s ease, border-color .12s ease; }",
       ".tu-rank:hover { transform:scale(1.02); border-color:rgba(79,140,255,.55); }",
@@ -88,7 +99,22 @@ window.__ModuleLoader__.load({
       ".tu-rank-vendor { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }",
       ".tu-rank-share { flex:none; font-weight:600; color:var(--dsw-alias-label-secondary, rgba(0,0,0,.65)); font-variant-numeric:tabular-nums; }",
       "@keyframes tu-tip-in { from { opacity:0; transform:translateY(3px) scale(.98); } to { opacity:1; transform:none; } }",
-      ".tu-err { border:1px solid rgba(239,68,68,.5); background:rgba(239,68,68,.08); border-radius:8px; padding:8px 12px; font-size:12px; color:var(--dsw-alias-state-error-primary, #ef4444); }"
+      ".tu-err { border:1px solid rgba(239,68,68,.5); background:rgba(239,68,68,.08); border-radius:8px; padding:8px 12px; font-size:12px; color:var(--dsw-alias-state-error-primary, #ef4444); }",
+      // sidebar footer card ("今日用量") + popup window
+      ".tu-today { display:flex; align-items:baseline; gap:2px; width:100%; box-sizing:border-box; border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:8px; background:var(--dsw-alias-bg-layer-1, #fff); color:var(--dsw-alias-label-primary, #1a1a1a); padding:7px 10px; font-size:12px; cursor:pointer; margin-bottom:6px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:background .12s ease, border-color .12s ease; }",
+      ".tu-today:hover { background:var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08)); border-color:rgba(79,140,255,.5); }",
+      ".tu-today-label { color:var(--dsw-alias-label-secondary, rgba(0,0,0,.6)); flex:none; }",
+      ".tu-today-value { font-weight:700; font-variant-numeric:tabular-nums; }",
+      ".tu-today-rail { justify-content:center; padding:7px 2px; font-size:11px; }",
+      ".tu-today-rail .tu-today-label { display:none; }",
+      ".tu-pop { position:fixed; inset:0; z-index:1200; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; animation:tu-pop-in .16s ease-out; }",
+      ".tu-pop-panel { width:min(940px, calc(100vw - 48px)); max-height:min(88vh, 760px); display:flex; flex-direction:column; background:var(--dsw-alias-bg-layer-1, #fff); border:1px solid var(--dsw-alias-border-l2, #e5e5e5); border-radius:12px; box-shadow:var(--dsw-shadow-lv2, 0 8px 32px rgba(0,0,0,.18)); overflow:hidden; }",
+      ".tu-pop-head { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--dsw-alias-border-l2, #e5e5e5); }",
+      ".tu-pop-title { font-size:15px; font-weight:600; color:var(--dsw-alias-label-primary, #1a1a1a); }",
+      ".tu-pop-close { border:none; background:transparent; cursor:pointer; font-size:14px; color:var(--dsw-alias-label-tertiary, rgba(0,0,0,.55)); padding:4px 8px; border-radius:6px; }",
+      ".tu-pop-close:hover { background:var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08)); color:var(--dsw-alias-label-primary, #1a1a1a); }",
+      ".tu-pop-body { overflow:auto; padding:16px; }",
+      "@keyframes tu-pop-in { from { opacity:0; } to { opacity:1; } }"
     ].join("\n")
 
     function fmtTokens(n) {
@@ -354,16 +380,17 @@ window.__ModuleLoader__.load({
       var mGrid = snap ? buildModelGrid(snap.modelRank.d30, snap.modelDaily30 || [], snap.now) : null
 
       return React.createElement("div", { className: "tu-root" },
+        // the popup header already carries the "Token 用量" title, so this
+        // row is the meta line (left) plus the action buttons (right)
         React.createElement("div", { className: "tu-head" },
-          React.createElement("h3", { className: "tu-title" }, "Token 用量"),
+          snap && React.createElement("div", { className: "tu-meta" },
+            "统计自 " + fmtTime(snap.trackingSince) + " · 历史回填至 " + fmtTime(snap.backfilledUntil)
+          ),
           React.createElement("div", null,
             React.createElement("button", { className: "tu-btn", disabled: busy, onClick: function () { load(false) } }, busy ? "刷新中…" : "刷新"),
             " ",
             React.createElement("button", { className: "tu-btn", disabled: busy, onClick: function () { load(true) } }, "回填历史")
           )
-        ),
-        snap && React.createElement("div", { className: "tu-meta" },
-          "统计自 " + fmtTime(snap.trackingSince) + " · 历史回填至 " + fmtTime(snap.backfilledUntil)
         ),
         error && React.createElement("div", { className: "tu-err" }, error),
         totals && React.createElement("div", { className: "tu-cards" },
@@ -425,6 +452,83 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // Sidebar footer card ("今日用量") next to Settings, and the popup window
+    // it opens. Polls the light /token-monitor/today route (no rebuild); the
+    // popup renders the full dashboard (the same Panel the settings page used
+    // to host). `props.wide` comes from the sidebar owner (false = 56 px rail):
+    // wide shows "今日用量：8888万" on one line; rail drops the label and keeps
+    // only the compact value.
+    function TodayCard(props) {
+      var todayState = React.useState(null)
+      var today = todayState[0]
+      var setToday = todayState[1]
+      var errState = React.useState(false)
+      var err = errState[0]
+      var setErr = errState[1]
+      var openState = React.useState(false)
+      var open = openState[0]
+      var setOpen = openState[1]
+
+      var loadToday = function () {
+        fetch(TODAY_URL, { cache: "no-store" })
+          .then(function (res) { return res.ok ? res.json() : null })
+          .then(function (d) {
+            if (!d || !d.ok || !d.today) { setErr(true); return }
+            setToday(d.today.inputTokens + d.today.outputTokens + d.today.cacheReadTokens + d.today.cacheWriteTokens)
+            setErr(false)
+          })
+          .catch(function () { setErr(true) })
+      }
+      React.useEffect(function () {
+        loadToday()
+        var id = setInterval(loadToday, 30000)
+        return function () { clearInterval(id) }
+      }, [])
+
+      // while open: Esc closes, background scroll is locked
+      React.useEffect(function () {
+        if (!open) return
+        var onKey = function (e) { if (e.key === "Escape") setOpen(false) }
+        document.addEventListener("keydown", onKey)
+        var prev = document.body.style.overflow
+        document.body.style.overflow = "hidden"
+        return function () {
+          document.removeEventListener("keydown", onKey)
+          document.body.style.overflow = prev
+        }
+      }, [open])
+
+      var wide = !props || props.wide !== false
+      var value = today === null ? (err ? "—" : "…") : fmtTokens(today)
+      return React.createElement(React.Fragment, null,
+        React.createElement("button", {
+          className: "tu-today" + (wide ? "" : " tu-today-rail"),
+          onClick: function () { setOpen(true) }
+        },
+          React.createElement("span", { className: "tu-today-label" }, "今日用量："),
+          React.createElement("span", { className: "tu-today-value" }, value)
+        ),
+        open && React.createElement("div", {
+          className: "tu-pop",
+          onClick: function (e) { if (e.target === e.currentTarget) setOpen(false) }
+        },
+          React.createElement("div", { className: "tu-pop-panel", role: "dialog", "aria-label": "Token 用量" },
+            React.createElement("div", { className: "tu-pop-head" },
+              React.createElement("span", { className: "tu-pop-title" }, "Token 用量"),
+              React.createElement("button", {
+                className: "tu-pop-close",
+                onClick: function () { setOpen(false) },
+                "aria-label": "关闭"
+              }, "✕")
+            ),
+            React.createElement("div", { className: "tu-pop-body" },
+              React.createElement(Panel)
+            )
+          )
+        )
+      )
+    }
+
     var inject = ["slots"]
 
     function apply(ctx) {
@@ -442,10 +546,13 @@ window.__ModuleLoader__.load({
 
       var slots = ctx.get("slots")
       if (slots === undefined) return
-      slots.inject("settings.section", function () {
+      // the dashboard no longer lives in Settings (settings.section removed):
+      // it opens from the sidebar footer card below, next to the gear icon.
+      // `sidebar.footer.action` is a root list slot — id must be unique here.
+      slots.inject("sidebar.footer.action", function () {
         return slots.register(
-          { name: "settings.section", id: "token-monitor", order: 30, label: "Token 用量" },
-          function () { return React.createElement(Panel) }
+          { name: "sidebar.footer.action", id: "token-monitor-today", order: 20 },
+          function (props) { return React.createElement(TodayCard, props) }
         )
       })
     }

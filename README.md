@@ -6,14 +6,14 @@
 
 > 🤖 **AI 生成声明**：本项目由 AI 辅助生成，仅供学习与技术交流使用，不构成任何形式的商业保证或支持承诺。
 
-一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：在 **设置 → Token 用量** 页面上原生展示你的 **token 用量与对话统计**——今日 / 近 7 天 / 近 30 天总量、近 30 天**按模型**的堆叠用量图、按模型的使用排行（固定 30 天窗口）、以及会话数统计。
+一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：在侧边栏底部（设置图标旁）放一张 **「今日用量」卡片**，实时显示今日 token 总量（形如"今日用量：8888万"）；**点击卡片即弹出完整统计窗口**——今日 / 近 7 天 / 近 30 天总量、近 30 天**按模型**的堆叠用量图、按模型的使用排行（固定 30 天窗口）、以及会话数统计。不再占用设置页面，一键直达。
 
-![Token 用量设置页](screenshot.png)
+![今日用量卡片](screenshot.png)
 
 ## 功能特性
 
-- 📊 **指标卡** — 今日 / 近 7 天 / 近 30 天的 Tokens 总量（万 / 亿单位），只显示大数字，保持清爽。
-- 📊 **近 30 天模型使用情况** — 30 天堆叠柱状图：每根柱子按模型分色堆叠（当天用量最高的模型在柱底，颜色按 30 天排名固定）；图表区域铺满**灰色点阵网格背景**（每列约两列点、从上到下铺满，参考 `temp/model-usage.png`），有调用的柱子叠在点阵之上；横轴只显示**每周一**的基准日期；悬浮/点击某天弹出明细卡片（日期 / 总计 / 各模型色块行，样式参考 `temp/tooltip.png`），无任何高亮/变灰/柱上标签效果。
+- 🚀 **一键直达** — 侧边栏「今日用量」卡片实时显示今日 token 总量（单行"今日用量：8888万"，每 30 秒自刷新，折叠成窄栏时只显示数值）；点击弹出统计窗口（支持 Esc / ✕ / 点遮罩关闭，背景滚动锁定）。
+- 📊 **近 30 天模型使用情况** — 30 天堆叠柱状图：每根柱子按模型分色堆叠（当天用量最高的模型在柱底，颜色按 30 天排名固定）；图表区域铺满**灰色点阵网格背景**（每一天恰好两列点、垂直每 13px 一行，参考 `temp/model-usage.png`），有调用的柱子叠在点阵之上；横轴只显示**每周一**的基准日期；悬浮/点击某天弹出明细卡片（日期 / 总计 / 各模型色块行，样式参考 `temp/tooltip.png`），无任何高亮/变灰/柱上标签效果。
 - 🏆 **模型使用排行** — 固定 30 天窗口：前 4 名 **2×2** 卡片（序号一行 / 模型名 + token 总数 / 提供商 + 占比右对齐，无增长与单位标签），悬停轻微放大。
 - 💬 **会话统计** — 今日 / 近 7 天 / 近 30 天开启的顶层对话数（不含子代理内部会话），副文字显示对应时段的模型请求次数。
 - 🔄 **自动刷新** — 页面每 30 秒轮询（带幂等重扫，数字自动修正），另有手动「刷新」与「回填历史」按钮。
@@ -37,7 +37,7 @@ dsh plugin --profile web add E:\path\to\dsh-token-monitor
 
 `dsh plugin` 会在 profile 目录中转发给 pnpm 安装，并自动调和 `dsh.profile.bundles`；包内 `dsh.bundle.patch`（`cordis.patch.yml`）把插件行插入宿主组合，`dsh.client.platform: "web"` 让 web 外壳加载 `client/bundle.js`。
 
-**安装后重启 DSH**，打开 设置 → Token 用量 即可看到页面。
+**安装后重启 DSH**，侧边栏底部（设置图标旁）会出现「今日用量」卡片，点击即弹出统计窗口。
 
 ## 架构
 
@@ -55,6 +55,8 @@ dsh plugin --profile web add E:\path\to\dsh-token-monitor
 │  • persist()                ← 防抖写入（schema v3：按天按模型分桶， │
 │      保留 181 天）                                                │
 │      $DSH_HOME/plugins/token-monitor/data.json                      │
+│  • webServer.register('/token-monitor/today') ← 轻量今日读数（不触发│
+│      重建，供侧边栏卡片轮询）                                        │
 │  • webServer.register('/token-monitor/snapshot') ← 供 Client 读取   │
 │      （静态 bundle 模式，含 modelRank 三档聚合 + modelDaily30）       │
 └─────────────────────────────────────────────────────────────────────┘
@@ -63,9 +65,11 @@ dsh plugin --profile web add E:\path\to\dsh-token-monitor
 ┌────────────────────────── Client（浏览器）─────────────────────────┐
 │ client/bundle.js — 手工构建的 web bundle，符合 client-modules 协议  │
 │  （window.__ModuleLoader__.load）                                  │
-│  • slots.inject('settings.section') → 设置页「Token 用量」          │
+│  • slots.inject('sidebar.footer.action') → 侧边栏「今日用量」卡片     │
+│      （点击弹出 fixed 模态，内容 = 完整统计面板；无 settings.section）│
 │  • 指标卡 + 会话卡 + 30 天模型堆叠图 + 模型使用排行                  │
-│  • 30 秒轮询、刷新 / 回填历史按钮                                  │
+│  • 卡片每 30 秒轮询 /token-monitor/today；弹窗打开时拉取快照并       │
+│    每 30 秒刷新，另有刷新 / 回填历史按钮                            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

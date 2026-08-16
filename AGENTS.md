@@ -1,6 +1,6 @@
 # AGENTS.md
 
-DSH (DeepSeek Harness) plugin: a token-usage dashboard rendered as a Settings page (Settings → Token 用量). The host half captures token usage from model calls and session logs; the browser half draws the UI.
+DSH (DeepSeek Harness) plugin: a token-usage dashboard opened from a sidebar card ("今日用量" next to Settings) that pops a modal window. The host half derives usage from the session corpus; the browser half draws the UI.
 
 ## Design Reference
 
@@ -13,7 +13,7 @@ DSH (DeepSeek Harness) plugin: a token-usage dashboard rendered as a Settings pa
 
 ### 关键组件
 - **堆叠柱状图**：X 轴为日期（按周标签），每根柱子按模型堆叠不同颜色，支持 Tooltip 悬浮显示详情
-- **模型颜色映射表**：为每个模型分配固定颜色（粉色、淡紫色、蓝色、浅青色、青绿色、绿色、黄绿色、黄色、橙色）
+- **模型颜色映射表**：为每个模型分配固定颜色（莫兰迪冷淡风但区分明显：深雾蓝、灰紫、鼠尾草绿、陶土棕、沙金、钢青、浅雾蓝、干枯玫瑰、深灰绿——明度分深/中/浅三档、色相分散，堆叠段不混淆）
 - **排名卡片组件**：展示 Top N 模型，包含排名编号、厂商图标/名、模型名、总使用量、增长率
 - **Tooltip 组件**：白色背景、圆角、阴影，左侧颜色图例 + 模型名 + 数值，数值右对齐
 
@@ -26,7 +26,7 @@ DSH (DeepSeek Harness) plugin: a token-usage dashboard rendered as a Settings pa
 ## Layout
 
 - `src/index.js` — host (Node) half, a Cordis plugin (`module.exports = { name, inject, apply(ctx) }`). Package entry (`package.json` → `main`).
-- `client/bundle.js` — browser half, a **hand-written** bundle following the client-modules protocol (`window.__ModuleLoader__.load({ id, factory(require) })`). Exported as the `./client` subpath and served by the web shell via `dsh.client.platform: "web"`.
+- `client/bundle.js` — browser half, a **hand-written** bundle following the client-modules protocol (`window.__ModuleLoader__.load({ id, factory(require) })`). Exported as the `./client` subpath and served by the web shell via `dsh.client.platform: "web"`. The bundle registers ONLY into the root `sidebar.footer.action` slot (a "今日用量" card next to Settings whose click opens a self-drawn modal window — there is deliberately **no `settings.section` page anymore**).
 - `cordis.patch.yml` — `dsh.bundle.patch`: inserts the `token-monitor` row into the **host** composition when installed via `dsh plugin add`. Must stay host-plane (it reads host services `sessionQuery`, `timer`, `webServer`) — never move it into an agent preset. Keep the id in sync with the plugin `name` and the client bundle (slot id, `data-plugin` attr).
 - `README.md` — Chinese, the default GitHub landing page; `README.en.md` — English mirror (GitHub auto-shows it to English-locale browsers). Update both together.
 
@@ -42,13 +42,13 @@ The client bundle must stay hand-written ES5-style (no JSX, no imports; `React.c
 
 ## Running / testing
 
-Not runnable standalone — it only works inside a live DSH host. Install into a profile, restart DSH, then open Settings → Token 用量:
+Not runnable standalone — it only works inside a live DSH host. Install into a profile, restart DSH, then click the "今日用量" card at the sidebar foot (below the session list, next to Settings) to open the dashboard popup:
 
 ```bash
 dsh plugin --profile web add E:\path\to\dsh-token-monitor
 ```
 
-The host registers the HTTP route `/token-monitor/snapshot` via `webServer.register({ kind: 'exact', path, handler })`; the browser half fetches it with `{ cache: 'no-store' }` and polls every 30 s (`?backfill=1` triggers a session-corpus backfill).
+The host registers two HTTP routes via `webServer.register({ kind: 'exact', path, handler })`: `/token-monitor/today` (light read of the in-memory today bucket — zero rebuild, polled every 30 s by the sidebar card) and `/token-monitor/snapshot` (full dashboard; the browser half fetches it with `{ cache: 'no-store' }` when the popup opens and polls every 30 s; `?backfill=1` kicks off a fire-and-forget background rebuild).
 
 ## Contracts that must not break
 
@@ -63,6 +63,7 @@ The host registers the HTTP route `/token-monitor/snapshot` via `webServer.regis
 - Client visuals must use DSH theme tokens (`--dsw-alias-*`, e.g. `--dsw-alias-label-primary`, `--dsw-alias-border-l2`, `--dsw-alias-bg-layer-1`) with fallbacks so light and dark themes both work: flat cards, 1px hairline borders, 8–10 px radii, no shadows. The bundle injects and removes its own `<style>` element (tagged `data-plugin`).
 - UI strings are Chinese ("Token 用量", "刷新", "回填历史"); token numbers use 万 / 亿 units.
 - The tooltip card is hand-rolled (not the primitives `Tooltip`, which takes only a label): a `position:fixed` card positioned imperatively in a `useEffect` (flip above/below the hovered element, clamp to viewport, arrow aligned to it), hidden on scroll/resize, `pointer-events:none`; surfaces use `--dsw-alias-bg-layer-2` + `--dsw-shadow-lv2` so it reads correctly in light and dark themes. Styled after `temp/tooltip.png`: date row, big total + small "总计" suffix, then colored-swatch rows (model name left, value right-aligned) with no separators and no request counts.
-- The 30-day model chart (`buildModelGrid`) renders one column per day (fixed 30-day window, `MODEL_WINDOW`) with one colored segment per model. `segs` are kept sorted by that day's usage **descending** (heaviest first) for the tooltip rows; the column renderer iterates them **in reverse** so the heaviest segment sits at the bottom of the bar (flex-end aligns the group to the bottom but preserves document order — do not rely on it to reverse). Colors are fixed by the 30-day rank (`colorOrder` = `modelRank.d30`, `MODEL_COLORS` palette pink → orange) so they stay stable. The plot area has a grey dot-grid background drawn **per column** (`.tu-mcol` radial-gradient, 13px grid, `background-position:center`) so the dot columns align with and are centered under each bar column (per `temp/model-usage.png`); empty days and the space behind bars are both dotted. Interaction has **no highlight/dim/scale effects and no label above the bar**: hovering a bar shows the breakdown card, clicking pins it, clicking again unpins; baseline axis labels show Mondays only (`new Date(c.ts).getDay() === 1`, `fmtMD`).
+- The 30-day model chart (`buildModelGrid`) renders one column per day (fixed 30-day window, `MODEL_WINDOW`) with one colored segment per model. `segs` are kept sorted by that day's usage **descending** (heaviest first) for the tooltip rows; the column renderer iterates them **in reverse** so the heaviest segment sits at the bottom of the bar (flex-end aligns the group to the bottom but preserves document order — do not rely on it to reverse). Colors are fixed by the 30-day rank (`colorOrder` = `modelRank.d30`, `MODEL_COLORS` morandi palette with three lightness tiers — dark `#54718f`/`#5f8f93`, mid `#8b7fa8`/`#7f9c86`/`#b5816f`/`#75826f`, light `#c9ad6b`/`#a8c0d8`/`#c9a3a8` — spread hues so stacked segments stay distinguishable) so they stay stable. The plot area has a grey dot-grid background drawn **per column** (`.tu-mcol` two `radial-gradient` layers, each `background-size:4px 13px`, positioned at `25% 0` / `75% 0` with `repeat-y`) so every day renders EXACTLY two dot columns — dot centers sit at the column's 25% / 75% for ANY column width (no tiling math, nothing clipped), with a 13px row pitch from the top (per `temp/model-usage.png`); empty days and the space behind bars are both dotted. Segment seams use `border-bottom:1px solid var(--dsw-alias-bg-layer-1)` on every segment except the bottom one (`:not(:last-child)`, box-sizing:border-box) — the 1 px seam is card-colored so the dot grid NEVER shows through the bar itself; dots only appear in the empty space above the bar. Interaction has **no highlight/dim/scale effects and no label above the bar**: hovering a bar shows the breakdown card, clicking pins it, clicking again unpins; baseline axis labels show Mondays only (`new Date(c.ts).getDay() === 1`, `fmtMD`).
 - The model ranking section is fixed to the 30-day window (`modelRank.d30`) with **no title and no base switcher** (`.tu-seg` removed): it renders the top 4 models in a **2×2 grid** (`.tu-mrank`, `repeat(2,1fr)`), each card a vertical stack — rank number alone on its own line (`.tu-rank-num`, 12px semibold), then model name (15px semibold) + token total (18px bold, right-aligned, baseline-aligned) on the second line (`.tu-rank-main`), then provider + usage share on the third (`.tu-rank-sub`, `space-between`: provider left with ellipsis, bare percentage right-aligned — no "占比"/"·" label text, share semibold). **No color swatch element, no growth, no "总计" unit, no "新增" labels**; the usage share is computed client-side as `m.total / Σ modelRank.d30 totals` (the host sends no percent field); cards scale slightly on hover.
+- The dashboard entry point is a `sidebar.footer.action` card (`.tu-today`, id `token-monitor-today`, order 20) rendered by `TodayCard`: a small bordered button below the session list showing "今日用量：<today total>" (fmtTokens, tabular-nums) on one line, polling the light `/token-monitor/today` route every 30 s with `{ cache: 'no-store' }`. It receives the sidebar owner props — `wide` false (56 px rail) hides the "今日用量：" label and keeps only the compact value (`.tu-today-rail`). Clicking opens a self-drawn modal (`.tu-pop`, `position:fixed` overlay `z-index:1200`, dark rgba mask, centered panel `width:min(940px, calc(100vw - 48px))` / `max-height:min(88vh, 760px)`, DSH surface tokens, header with title + ✕ close) whose body renders the same `Panel` the settings page used to host; Esc, the ✕ button, and clicking the mask all close it, and the body scroll is locked while open (overflow hidden). There is NO `settings.section` registration — the dashboard exists only in this popup.
 - Cross-check host API contracts against the installed harness's `node_modules/@deepseek-ai/dsh-*` sources (`dsh-llm`, `dsh-session-query`, `dsh-host-webserver`, `dsh-cordis-client-runner` slot docs) rather than guessing.

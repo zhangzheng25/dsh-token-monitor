@@ -384,11 +384,30 @@ module.exports = {
       }
     }
 
-    // ── HTTP route for the Client half ─────────────────────────────────────
-    // ?backfill=1 kicks off a background rebuild WITHOUT awaiting it: the page
-    // must get the current buckets immediately, and the fresh fold lands on
-    // the next poll. (The startup rebuild at boot has usually already run by
-    // the time the page opens, so the served numbers are fresh either way.)
+    // ── HTTP routes for the Client half ────────────────────────────────────
+    // /token-monitor/today: the light read behind the sidebar "今日用量" card —
+    // serves the current in-memory today bucket WITHOUT triggering a rebuild.
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: '/token-monitor/today',
+      handler: async (req, res) => {
+        try {
+          const now = Date.now()
+          const todayStart = dayKey(now)
+          const today = sumBuckets([...daily.values()].filter((b) => b.ts === todayStart))
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ ok: true, now, today }))
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ ok: false, error: String((e && e.message) || e) }))
+        }
+      },
+    }))
+    // /token-monitor/snapshot: the full dashboard — ?backfill=1 kicks off a
+    // background rebuild WITHOUT awaiting it: the page must get the current
+    // buckets immediately, and the fresh fold lands on the next poll. (The
+    // startup rebuild at boot has usually already run by the time the page
+    // opens, so the served numbers are fresh either way.)
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact',
       path: '/token-monitor/snapshot',
