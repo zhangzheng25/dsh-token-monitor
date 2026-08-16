@@ -276,8 +276,10 @@ window.__ModuleLoader__.load({
       }
 
       React.useEffect(function () {
-        load(false)
-        var id = setInterval(function () { load(false) }, 30000)
+        // poll WITH backfill: the host rebuild is an idempotent corpus fold,
+        // so every poll both refreshes and self-corrects the buckets
+        load(true)
+        var id = setInterval(function () { load(true) }, 30000)
         return function () { clearInterval(id) }
       }, [])
 

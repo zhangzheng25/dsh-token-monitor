@@ -1,16 +1,19 @@
 'use strict'
 
 /**
- * dsh-token-monitor — Host half (v2: simplified)
+ * dsh-token-monitor — Host half (v3: single source of truth)
  *
  * Jobs:
- *  1. Listen to the `llm/stream` waterfall and fold every real model call's
- *     provider-reported TokenUsage into in-memory daily buckets, split by
- *     model (request options carry provider/model) and by day.
- *  2. Backfill historical usage from the session corpus via `sessionQuery`
- *     (`assistant/message` usage events, model from `message.source`), so the
- *     dashboard shows today / 7 / 30 days even for usage that predates this
- *     plugin's install.
+ *  1. Fold usage from the session corpus into in-memory daily buckets, split
+ *     by model ("provider:model" from message.source) and by day (event time).
+ *     The corpus is live-preferred (`sessionQuery` reads in-memory sessions
+ *     plus persisted logs), so it is complete and current on its own — there
+ *     is NO llm/stream live capture: it used to double-count every call the
+ *     moment a backfill re-read the same events from the logs.
+ *  2. Rebuild the buckets idempotently on startup, on the manual "回填历史"
+ *     button, and on every snapshot poll: each run folds the whole in-window
+ *     corpus into a fresh map and swaps it in atomically, so repeated runs
+ *     never double-count and stale/inflated buckets self-heal.
  *  3. Track conversation counts per workspace (top-level sessions only,
  *     `delegationDepth === 0`, grouped by header `cwd`).
  *  4. Persist buckets to $DSH_HOME/plugins/token-monitor/data.json so history
@@ -77,11 +80,10 @@ module.exports = {
   inject: ['timer', 'webServer'],
 
   apply(ctx) {
-    const daily = new Map()
+    let daily = new Map()
     let trackingSince = Date.now()
     let backfilledUntil = 0
     let dirty = false
-    let saveTimer = null
 
     // ── load persisted buckets (one-time migration from the legacy path) ──
     const file = dataFile()
@@ -105,9 +107,8 @@ module.exports = {
           if (saved.backfilledUntil) backfilledUntil = saved.backfilledUntil
         } else {
           // v1/v2 -> v3 migration: older buckets predate the 181-day retention
-          // window (or the per-model breakdown). Drop them and reset the
-          // backfill cursor; the startup full backfill rebuilds the whole
-          // window from the session corpus (source of truth).
+          // window (or the per-model breakdown). Drop them; the startup
+          // rebuild restores the whole window from the session corpus.
           backfilledUntil = 0
         }
       }
@@ -120,17 +121,6 @@ module.exports = {
       for (const k of daily.keys()) if (k < now - DAILY_KEEP_MS) daily.delete(k)
     }
 
-    /** Model identity for a live llm/stream call, from the waterfall options (provider/model on the request). */
-    function liveModelKey(options) {
-      try {
-        const provider = options && options.provider
-        const model = options && options.model
-        return provider && model ? String(provider) + ':' + String(model) : null
-      } catch {
-        return null
-      }
-    }
-
     /** Model identity for a session-log assistant/message event, from message.source. */
     function sourceModelKey(data) {
       try {
@@ -141,13 +131,14 @@ module.exports = {
       }
     }
 
-    function recordUsage(usage, ts, modelKey) {
-      const at = ts || Date.now()
-      const dk = dayKey(at)
-      let d = daily.get(dk)
+    /** Fold one usage event into a daily-bucket map (used with a fresh map per
+     *  rebuild so repeated folds are idempotent). */
+    function foldInto(map, usage, ts, modelKey) {
+      const dk = dayKey(ts)
+      let d = map.get(dk)
       if (!d) {
         d = emptyBucket(dk)
-        daily.set(dk, d)
+        map.set(dk, d)
       }
       d.requests += 1
       d.inputTokens += usage.inputTokens || 0
@@ -168,36 +159,29 @@ module.exports = {
         m.cacheWriteTokens += usage.cacheWriteTokens || 0
         m.reasoningTokens += usage.reasoningTokens || 0
       }
-      prune()
-      scheduleSave()
     }
 
-    // ── live capture: every real model call ────────────────────────────────
-    // Waterfall event: MUST call next() and forward the stream untouched,
-    // otherwise the model call breaks.
-    ctx.on('llm/stream', (options, next) => {
-      const inner = next()
-      const modelKey = liveModelKey(options)
-      return (async function* () {
-        for await (const chunk of inner) {
-          if (chunk && chunk.type === 'usage' && chunk.usage) {
-            try {
-              recordUsage(chunk.usage, undefined, modelKey)
-            } catch {
-              // accounting must never break the stream
-            }
-          }
-          yield chunk
-        }
-      })()
-    })
-
-    // ── backfill from the session corpus ───────────────────────────────────
+    // ── rebuild from the session corpus (single source of truth) ───────────
+    // The corpus is live-preferred, so it already includes in-flight calls;
+    // each run folds the whole in-window corpus into a FRESH map and swaps it
+    // in atomically. Repeated runs are idempotent — no double counting, and
+    // stale buckets self-heal. Runs are coalesced (one in flight) and
+    // throttled to at most one per 20 s; on failure the previous buckets
+    // stay served.
+    let backfilling = false
+    let lastBackfillAt = 0
     async function backfill() {
+      if (backfilling) return
+      const now = Date.now()
+      // throttle: at most one full fold per 20 s — the 30 s poll and the
+      // page-open fetch must not each pay for a full corpus scan
+      if (now - lastBackfillAt < 20000) return
       const query = ctx.get('sessionQuery')
       if (!query) return
-      const windowStart = Date.now() - DAILY_KEEP_MS
+      backfilling = true
       try {
+        const windowStart = Date.now() - DAILY_KEEP_MS
+        const next = new Map()
         const sessions = await query.listSessions()
         for (const rec of sessions) {
           const header = rec && rec.header
@@ -212,24 +196,32 @@ module.exports = {
           }
           if (!log || !Array.isArray(log.events)) continue
           for (const ev of log.events) {
-            if (!ev || ev.time <= backfilledUntil) continue
+            if (!ev || typeof ev.time !== 'number') continue
             if (ev.type === 'assistant/message' && ev.data && ev.data.usage) {
               try {
-                recordUsage(ev.data.usage, ev.time, sourceModelKey(ev.data))
+                foldInto(next, ev.data.usage, ev.time, sourceModelKey(ev.data))
               } catch {
                 // keep going
               }
             }
           }
         }
-        backfilledUntil = Date.now()
+        daily = next
+        backfilledUntil = now
+        lastBackfillAt = now
+        prune()
         dirty = true
+        // persist right away (cheap enough at the 20 s throttle; the 60 s
+        // flush timer remains as a safety net)
+        persist()
       } catch {
-        // backfill is best-effort; live capture keeps working
+        // rebuild is best-effort; keep the previous buckets on failure
+      } finally {
+        backfilling = false
       }
     }
 
-    // ── persistence (debounced; flush on dispose and every 60 s) ───────────
+    // ── persistence (after each rebuild; flush on dispose and every 60 s) ──
     function persist() {
       if (!dirty) return
       dirty = false
@@ -251,25 +243,8 @@ module.exports = {
       }
     }
 
-    function scheduleSave() {
-      dirty = true
-      if (saveTimer) return
-      saveTimer = ctx.timeout(() => {
-        saveTimer = null
-        persist()
-      }, 5000)
-    }
-
     const flushTimer = ctx.interval(() => persist(), 60000)
     ctx.effect(() => () => {
-      if (saveTimer) {
-        try {
-          saveTimer.dispose()
-        } catch {
-          /* ignore */
-        }
-        saveTimer = null
-      }
       flushTimer.dispose()
       persist()
     })
@@ -410,14 +385,19 @@ module.exports = {
     }
 
     // ── HTTP route for the Client half ─────────────────────────────────────
-    // ?backfill=1 triggers a session-corpus backfill before serving.
+    // ?backfill=1 kicks off a background rebuild WITHOUT awaiting it: the page
+    // must get the current buckets immediately, and the fresh fold lands on
+    // the next poll. (The startup rebuild at boot has usually already run by
+    // the time the page opens, so the served numbers are fresh either way.)
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact',
       path: '/token-monitor/snapshot',
       handler: async (req, res) => {
         try {
           const url = new URL(req.url || '/', 'http://dsh.local')
-          if (url.searchParams.get('backfill') === '1') await backfill()
+          if (url.searchParams.get('backfill') === '1') {
+            backfill().catch(() => {})
+          }
           const body = JSON.stringify(await buildSnapshot())
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(body)

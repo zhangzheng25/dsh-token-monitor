@@ -1,7 +1,7 @@
 {
   "name": "dsh-token-monitor",
-  "version": "0.4.0",
-  "description": "DeepSeek Harness plugin: token usage dashboard (today / 7 / 30 days), 30-day per-model stacked chart, per-model usage ranking (switchable today / 7 days / 30 days) and per-workspace conversation stats, rendered as a settings page. Data from live llm/stream usage chunks plus session-log backfill, persisted across restarts.",
+  "version": "0.5.0",
+  "description": "DeepSeek Harness plugin: token usage dashboard (today / 7 / 30 days), 30-day per-model stacked chart, 30-day model usage ranking with usage share, and conversation stats, rendered as a settings page. Data comes from the session corpus only (idempotent rebuild, no double counting), persisted across restarts.",
   "license": "MIT",
   "keywords": [
     "dsh",
